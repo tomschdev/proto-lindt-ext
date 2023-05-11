@@ -3,69 +3,99 @@
  *--------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import * as child_process from 'child_process';
+import * as os from 'os';
+import * as path from 'path';
+import * as util from 'util';
+import * as fs from 'fs';
 import { subscribeToDocumentChanges, EMOJI_MENTION } from './diagnostics';
+import { UnderlyingByteSource } from 'stream/web';
 
 const COMMAND = 'code-actions-sample.command';
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
+	const exec = util.promisify(child_process.exec);
+
+    // Download the api-linter binary
+    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'api-linter'));
+    try {
+		console.log(tempDir);
+		await exec('go install github.com/googleapis/api-linter/cmd/api-linter@latest', {
+		env: { ...process.env, GOBIN: tempDir },
+		});
+    } catch (error) {
+		console.log('Error downloading api-linter binary:', error);
+		return;
+    }
+
 	context.subscriptions.push(
-		vscode.languages.registerCodeActionsProvider('markdown', new Emojizer(), {
-			providedCodeActionKinds: Emojizer.providedCodeActionKinds
+		vscode.languages.registerCodeActionsProvider('proto', new LindtSuggester(), {
+			providedCodeActionKinds: LindtSuggester.providedCodeActionKinds
 		}));
 
-	const emojiDiagnostics = vscode.languages.createDiagnosticCollection("emoji");
-	context.subscriptions.push(emojiDiagnostics);
-
-	subscribeToDocumentChanges(context, emojiDiagnostics);
+	// subscribeToDocumentChanges(context, emojiDiagnostics);
 
 	context.subscriptions.push(
-		vscode.languages.registerCodeActionsProvider('markdown', new Emojinfo(), {
-			providedCodeActionKinds: Emojinfo.providedCodeActionKinds
-		})
+		vscode.commands.registerCommand(COMMAND, (aip) => vscode.env.openExternal(vscode.Uri.parse('https://google.aip.dev/${ aip }'))) //TODO
 	);
+	console.log('Extension activated!');
 
-	context.subscriptions.push(
-		vscode.commands.registerCommand(COMMAND, () => vscode.env.openExternal(vscode.Uri.parse('https://unicode.org/emoji/charts-12.0/full-emoji-list.html')))
-	);
 }
 
 /**
  * Provides code actions for converting :) to a smiley emoji.
  */
-export class Emojizer implements vscode.CodeActionProvider {
+export class LindtSuggester implements vscode.CodeActionProvider {
 
 	public static readonly providedCodeActionKinds = [
 		vscode.CodeActionKind.QuickFix
 	];
 
-	public provideCodeActions(document: vscode.TextDocument, range: vscode.Range): vscode.CodeAction[] | undefined {
-		if (!this.isAtStartOfSmiley(document, range)) {
-			return;
-		}
+	public async provideCodeActions(document: vscode.TextDocument, range: vscode.Range): Promise<vscode.CodeAction[] | undefined> {
+		const linting = await this.applyAPILinter(document);
+		console.log("Current file linting: " + linting);
 
-		const replaceWithSmileyCatFix = this.createFix(document, range, '😺');
+		// const replaceWithSmileyCatFix = this.createFix(document, range, '😺');
 
-		const replaceWithSmileyFix = this.createFix(document, range, '😀');
+		// const replaceWithSmileyFix = this.createFix(document, range, '😀');
 		// Marking a single fix as `preferred` means that users can apply it with a
 		// single keyboard shortcut using the `Auto Fix` command.
-		replaceWithSmileyFix.isPreferred = true;
+		// replaceWithSmileyFix.isPreferred = true;
 
-		const replaceWithSmileyHankyFix = this.createFix(document, range, '💩');
+		// const replaceWithSmileyHankyFix = this.createFix(document, range, '💩');
 
-		const commandAction = this.createCommand();
+		// const commandAction = this.createCommand();
 
-		return [
-			replaceWithSmileyCatFix,
-			replaceWithSmileyFix,
-			replaceWithSmileyHankyFix,
-			commandAction
-		];
+		// return [
+		// 	replaceWithSmileyCatFix,
+		// 	replaceWithSmileyFix,
+		// 	replaceWithSmileyHankyFix,
+		// 	commandAction
+		// ];
+		return;
 	}
 
-	private isAtStartOfSmiley(document: vscode.TextDocument, range: vscode.Range) {
-		const start = range.start;
-		const line = document.lineAt(start.line);
-		return line.text[start.character] === ':' && line.text[start.character + 1] === ')';
+	private async applyAPILinter(document: vscode.TextDocument): Promise<string | undefined> {
+		const exec = util.promisify(child_process.exec);
+		const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'api-linter'));
+		const binaryPath = path.join(tempDir, 'api-linter');
+
+		// Apply the linter to the current file
+		// Get the active file's URI
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			console.log('No active text editor found.');
+			return;
+		}
+		const fileURI = editor.document.uri;
+		const filePath = fileURI.fsPath;
+		try {
+			const { stdout, stderr } = await exec(`${binaryPath} ${filePath}`);
+			return stdout;
+		} catch (error) {
+			console.log('Error running api-linter:', error);
+			return;
+		}
 	}
 
 	private createFix(document: vscode.TextDocument, range: vscode.Range, emoji: string): vscode.CodeAction {
@@ -77,7 +107,7 @@ export class Emojizer implements vscode.CodeActionProvider {
 
 	private createCommand(): vscode.CodeAction {
 		const action = new vscode.CodeAction('Learn more...', vscode.CodeActionKind.Empty);
-		action.command = { command: COMMAND, title: 'Learn more about emojis', tooltip: 'This will open the unicode emoji page.' };
+		action.command = { command: COMMAND, title: 'Learn more about AIP', tooltip: 'This will open the AIP that is suggesting the code edit.' };
 		return action;
 	}
 }

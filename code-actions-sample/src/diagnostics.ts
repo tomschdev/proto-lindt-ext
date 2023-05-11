@@ -45,19 +45,8 @@ function createDiagnostic(doc: vscode.TextDocument, lineOfText: vscode.TextLine,
 }
 
 export function subscribeToDocumentChanges(context: vscode.ExtensionContext, emojiDiagnostics: vscode.DiagnosticCollection): void {
-	if (vscode.window.activeTextEditor) {
-		refreshDiagnostics(vscode.window.activeTextEditor.document, emojiDiagnostics);
-	}
 	context.subscriptions.push(
-		vscode.window.onDidChangeActiveTextEditor(editor => {
-			if (editor) {
-				refreshDiagnostics(editor.document, emojiDiagnostics);
-			}
-		})
-	);
-
-	context.subscriptions.push(
-		vscode.workspace.onDidChangeTextDocument(e => refreshDiagnostics(e.document, emojiDiagnostics))
+		vscode.workspace.onDidSaveTextDocument(e => refreshDiagnostics(e, emojiDiagnostics))
 	);
 
 	context.subscriptions.push(

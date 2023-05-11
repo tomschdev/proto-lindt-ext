@@ -1,6 +1,6 @@
 {
 	"name": "code-actions-sample",
-	"private": true,
+	"private": false,
 	"displayName": "Code Actions Provider Sample",
 	"version": "0.0.2",
 	"publisher": "vscode-samples",

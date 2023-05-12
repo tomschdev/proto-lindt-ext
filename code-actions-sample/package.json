@@ -18,7 +18,7 @@
 		"Other"
 	],
 	"activationEvents": [
-		"onLanguage:markdown"
+    	"onDidSaveTextDocument"
 	],
 	"main": "./out/extension.js",
 	"scripts": {

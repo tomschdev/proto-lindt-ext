@@ -8,12 +8,12 @@ import * as os from 'os';
 import * as path from 'path';
 import * as util from 'util';
 import * as fs from 'fs';
-import { subscribeToDocumentChanges, EMOJI_MENTION } from './diagnostics';
-import { UnderlyingByteSource } from 'stream/web';
+import { subscribeToDocumentChanges } from './diagnostics';
 
-const COMMAND = 'code-actions-sample.command';
+const COMMAND = 'aip-redirect.command';
 
 export async function activate(context: vscode.ExtensionContext) {
+	vscode.window.showInformationMessage('Extension activated!');
 	const exec = util.promisify(child_process.exec);
 
     // Download the api-linter binary
@@ -31,9 +31,10 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.languages.registerCodeActionsProvider('proto', new LindtSuggester(), {
 			providedCodeActionKinds: LindtSuggester.providedCodeActionKinds
-		}));
+		})
+	);
 
-	// subscribeToDocumentChanges(context, emojiDiagnostics);
+	subscribeToDocumentChanges(context, vscode.languages.createDiagnosticCollection('api-linter'));
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand(COMMAND, (aip) => vscode.env.openExternal(vscode.Uri.parse('https://google.aip.dev/${ aip }'))) //TODO
@@ -43,7 +44,7 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 /**
- * Provides code actions for converting :) to a smiley emoji.
+ * Provides code actions to address google's api-linter feedback.
  */
 export class LindtSuggester implements vscode.CodeActionProvider {
 
@@ -51,31 +52,32 @@ export class LindtSuggester implements vscode.CodeActionProvider {
 		vscode.CodeActionKind.QuickFix
 	];
 
+	private disposables: vscode.Disposable[] = [];
+	constructor() {
+		this.disposables.push(
+			vscode.workspace.onDidSaveTextDocument(this.handleDocumentSave, this)
+		);
+	}
+
+	dispose() {
+		for (const disposable of this.disposables) {
+			disposable.dispose();
+		}
+	}
+
+	// Chain this function to the document save event, to suggest fixes for linter feedback
 	public async provideCodeActions(document: vscode.TextDocument, range: vscode.Range): Promise<vscode.CodeAction[] | undefined> {
-		const linting = await this.applyAPILinter(document);
-		console.log("Current file linting: " + linting);
-
-		// const replaceWithSmileyCatFix = this.createFix(document, range, '😺');
-
-		// const replaceWithSmileyFix = this.createFix(document, range, '😀');
-		// Marking a single fix as `preferred` means that users can apply it with a
-		// single keyboard shortcut using the `Auto Fix` command.
-		// replaceWithSmileyFix.isPreferred = true;
-
-		// const replaceWithSmileyHankyFix = this.createFix(document, range, '💩');
-
-		// const commandAction = this.createCommand();
-
-		// return [
-		// 	replaceWithSmileyCatFix,
-		// 	replaceWithSmileyFix,
-		// 	replaceWithSmileyHankyFix,
-		// 	commandAction
-		// ];
+		
+		const linting = this.applyLinter(document);
+		if (linting) {
+			vscode.window.showInformationMessage("Current file linting: " + linting);
+		} else {
+			vscode.window.showInformationMessage("No linting returned.");
+		}
 		return;
 	}
 
-	private async applyAPILinter(document: vscode.TextDocument): Promise<string | undefined> {
+	private async applyLinter(document: vscode.TextDocument): Promise<string | undefined> {
 		const exec = util.promisify(child_process.exec);
 		const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'api-linter'));
 		const binaryPath = path.join(tempDir, 'api-linter');
@@ -84,7 +86,7 @@ export class LindtSuggester implements vscode.CodeActionProvider {
 		// Get the active file's URI
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
-			console.log('No active text editor found.');
+			vscode.window.showInformationMessage('No active text editor found.');
 			return;
 		}
 		const fileURI = editor.document.uri;
@@ -93,46 +95,56 @@ export class LindtSuggester implements vscode.CodeActionProvider {
 			const { stdout, stderr } = await exec(`${binaryPath} ${filePath}`);
 			return stdout;
 		} catch (error) {
-			console.log('Error running api-linter:', error);
+			vscode.window.showInformationMessage('Error running api-linter:' + error);
 			return;
 		}
 	}
 
-	private createFix(document: vscode.TextDocument, range: vscode.Range, emoji: string): vscode.CodeAction {
-		const fix = new vscode.CodeAction(`Convert to ${emoji}`, vscode.CodeActionKind.QuickFix);
-		fix.edit = new vscode.WorkspaceEdit();
-		fix.edit.replace(document.uri, new vscode.Range(range.start, range.start.translate(0, 2)), emoji);
-		return fix;
-	}
+	// For reference
+	// private createFix(document: vscode.TextDocument, range: vscode.Range, emoji: string): vscode.CodeAction {
+	// 	const fix = new vscode.CodeAction(`Convert to ${emoji}`, vscode.CodeActionKind.QuickFix);
+	// 	fix.edit = new vscode.WorkspaceEdit();
+	// 	fix.edit.replace(document.uri, new vscode.Range(range.start, range.start.translate(0, 2)), emoji);
+	// 	return fix;
+	// }
 
-	private createCommand(): vscode.CodeAction {
-		const action = new vscode.CodeAction('Learn more...', vscode.CodeActionKind.Empty);
-		action.command = { command: COMMAND, title: 'Learn more about AIP', tooltip: 'This will open the AIP that is suggesting the code edit.' };
-		return action;
+	// private createCommand(): vscode.CodeAction {
+	// 	const action = new vscode.CodeAction('Learn more...', vscode.CodeActionKind.Empty);
+	// 	action.command = { command: COMMAND, title: 'Learn more about AIP', tooltip: 'This will open the AIP that is suggesting the code edit.' };
+	// 	return action;
+	// }
+
+	private handleDocumentSave(document: vscode.TextDocument) {
+		const linting = this.applyLinter(document);
+		if (linting) {
+			vscode.window.showInformationMessage("Current file linting: " + linting);
+		} else {
+			vscode.window.showInformationMessage("No linting returned.");
+		}
 	}
 }
 
 /**
  * Provides code actions corresponding to diagnostic problems.
  */
-export class Emojinfo implements vscode.CodeActionProvider {
+// export class Emojinfo implements vscode.CodeActionProvider {
 
-	public static readonly providedCodeActionKinds = [
-		vscode.CodeActionKind.QuickFix
-	];
+// 	public static readonly providedCodeActionKinds = [
+// 		vscode.CodeActionKind.QuickFix
+// 	];
 
-	provideCodeActions(document: vscode.TextDocument, range: vscode.Range | vscode.Selection, context: vscode.CodeActionContext, token: vscode.CancellationToken): vscode.CodeAction[] {
-		// for each diagnostic entry that has the matching `code`, create a code action command
-		return context.diagnostics
-			.filter(diagnostic => diagnostic.code === EMOJI_MENTION)
-			.map(diagnostic => this.createCommandCodeAction(diagnostic));
-	}
+// 	provideCodeActions(document: vscode.TextDocument, range: vscode.Range | vscode.Selection, context: vscode.CodeActionContext, token: vscode.CancellationToken): vscode.CodeAction[] {
+// 		// for each diagnostic entry that has the matching `code`, create a code action command
+// 		return context.diagnostics
+// 			.filter(diagnostic => diagnostic.code === EMOJI_MENTION)
+// 			.map(diagnostic => this.createCommandCodeAction(diagnostic));
+// 	}
 
-	private createCommandCodeAction(diagnostic: vscode.Diagnostic): vscode.CodeAction {
-		const action = new vscode.CodeAction('Learn more...', vscode.CodeActionKind.QuickFix);
-		action.command = { command: COMMAND, title: 'Learn more about emojis', tooltip: 'This will open the unicode emoji page.' };
-		action.diagnostics = [diagnostic];
-		action.isPreferred = true;
-		return action;
-	}
-}
+// 	private createCommandCodeAction(diagnostic: vscode.Diagnostic): vscode.CodeAction {
+// 		const action = new vscode.CodeAction('Learn more...', vscode.CodeActionKind.QuickFix);
+// 		action.command = { command: COMMAND, title: 'Learn more about emojis', tooltip: 'This will open the unicode emoji page.' };
+// 		action.diagnostics = [diagnostic];
+// 		action.isPreferred = true;
+// 		return action;
+// 	}
+// }

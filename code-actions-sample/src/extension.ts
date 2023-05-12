@@ -3,23 +3,25 @@
  *--------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { subscribeToDocumentChanges, EMOJI_MENTION } from './diagnostics';
-
+import * as util from 'util';
+import * as child_process from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 const COMMAND = 'code-actions-sample.command';
+const EMOJI_MENTION = 'emoji_mention';
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
+	
+
 	context.subscriptions.push(
-		vscode.languages.registerCodeActionsProvider('markdown', new Emojizer(), {
+		vscode.languages.registerCodeActionsProvider('proto3', new Emojizer(), {
 			providedCodeActionKinds: Emojizer.providedCodeActionKinds
-		}));
-
-	const emojiDiagnostics = vscode.languages.createDiagnosticCollection("emoji");
-	context.subscriptions.push(emojiDiagnostics);
-
-	subscribeToDocumentChanges(context, emojiDiagnostics);
+		})	
+	);
 
 	context.subscriptions.push(
-		vscode.languages.registerCodeActionsProvider('markdown', new Emojinfo(), {
+		vscode.languages.registerCodeActionsProvider('proto3', new Emojinfo(), {
 			providedCodeActionKinds: Emojinfo.providedCodeActionKinds
 		})
 	);
@@ -27,6 +29,8 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand(COMMAND, () => vscode.env.openExternal(vscode.Uri.parse('https://unicode.org/emoji/charts-12.0/full-emoji-list.html')))
 	);
+	vscode.window.showInformationMessage('Extension activated!');
+
 }
 
 /**
@@ -38,10 +42,33 @@ export class Emojizer implements vscode.CodeActionProvider {
 		vscode.CodeActionKind.QuickFix
 	];
 
-	public provideCodeActions(document: vscode.TextDocument, range: vscode.Range): vscode.CodeAction[] | undefined {
-		if (!this.isAtStartOfSmiley(document, range)) {
-			return;
-		}
+	public async provideCodeActions(document: vscode.TextDocument, range: vscode.Range): Promise<vscode.CodeAction[] | undefined> {
+		const tempDir = os.tmpdir();
+		const linterPath = path.join(tempDir, 'api-linter');
+		const installApiLinter = async (): Promise<void> => {
+			if (!fs.existsSync(linterPath)) {
+				console.log('api-linter not found. Installing...');
+				const cmd = 'go install github.com/googleapis/api-linter/cmd/api-linter@latest';
+				try {
+					child_process.execSync(cmd, {
+						env: {
+						...process.env,
+						GOBIN: tempDir, // sets the installation directory to the temp dir
+						},
+					});
+
+					console.log('api-linter installed successfully');
+				} catch (error) {
+					console.error(`failed to install api-linter: ${error}`);
+				}
+			} else {
+				console.log('api-linter is already installed');
+			}
+		};
+		installApiLinter();
+
+		const linting = await this.applyLinter(document, linterPath);
+		console.log("Current file linting: " + linting);
 
 		const replaceWithSmileyCatFix = this.createFix(document, range, '😺');
 
@@ -60,6 +87,29 @@ export class Emojizer implements vscode.CodeActionProvider {
 			replaceWithSmileyHankyFix,
 			commandAction
 		];
+	}
+
+	private async applyLinter(document: vscode.TextDocument, linterPath: string): Promise<string | undefined> {
+		const exec = util.promisify(child_process.exec);
+		const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'api-linter'));
+		const binaryPath = path.join(tempDir, 'api-linter');
+
+		// Apply the linter to the current file
+		// Get the active file's URI
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			vscode.window.showInformationMessage('No active text editor found.');
+			return;
+		}
+		const fileURI = editor.document.uri;
+		const filePath = fileURI.fsPath;
+		try {
+			const { stdout, stderr } = await exec(`${linterPath} ${filePath}`);
+			return stdout;
+		} catch (error) {
+			vscode.window.showInformationMessage('Error running api-linter:' + error);
+			return;
+		}
 	}
 
 	private isAtStartOfSmiley(document: vscode.TextDocument, range: vscode.Range) {

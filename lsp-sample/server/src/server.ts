@@ -22,9 +22,7 @@ import {
 	Position,
 } from 'vscode-languageserver/node';
 
-import {
-	TextDocument
-} from 'vscode-languageserver-textdocument';
+import { TextDocument } from 'vscode-languageserver-textdocument';
 
 // import { Position, Range } from 'vscode';
 import * as util from 'util';
@@ -34,13 +32,6 @@ import * as path from 'path';
 import axios from 'axios';
 import * as https from 'https';
 import { URL } from 'url';
-import { Configuration, OpenAIApi } from 'openai';
-
-const configuration = new Configuration({
-//   apiKey: process.env.OPENAI_API_KEY, TODO
-  apiKey: "xxx", 
-});
-const openai = new OpenAIApi(configuration);
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -49,11 +40,11 @@ const connection = createConnection(ProposedFeatures.all);
 // Create a simple text document manager.
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
-const tmpDir = "/Users/thomasscholtz/go/bin/";
+const tmpDir = '/Users/thomasscholtz/go/bin/';
 const tmpLinterPath = path.join(tmpDir, 'api-linter');
 
 const agent = new https.Agent({
-	rejectUnauthorized: false
+	rejectUnauthorized: false,
 });
 
 // Make a request for a user
@@ -62,7 +53,6 @@ let hasWorkspaceFolderCapability = false;
 let hasDiagnosticRelatedInformationCapability = false;
 
 connection.onInitialize((params: InitializeParams) => {
-
 	const capabilities = params.capabilities;
 
 	// Does the client support the `workspace/configuration` request?
@@ -84,15 +74,15 @@ connection.onInitialize((params: InitializeParams) => {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
 			// Tell the client that this server supports code completion.
 			completionProvider: {
-				resolveProvider: true
-			}
-		}
+				resolveProvider: true,
+			},
+		},
 	};
 	if (hasWorkspaceFolderCapability) {
 		result.capabilities.workspace = {
 			workspaceFolders: {
-				supported: true
-			}
+				supported: true,
+			},
 		};
 	}
 	return result;
@@ -104,7 +94,7 @@ connection.onInitialized(() => {
 		connection.client.register(DidChangeConfigurationNotification.type, undefined);
 	}
 	if (hasWorkspaceFolderCapability) {
-		connection.workspace.onDidChangeWorkspaceFolders(_event => {
+		connection.workspace.onDidChangeWorkspaceFolders((_event) => {
 			connection.console.log('Workspace folder change event received.');
 		});
 	}
@@ -124,7 +114,7 @@ let globalSettings: ExampleSettings = defaultSettings;
 // Cache the settings of all open documents
 const documentSettings: Map<string, Thenable<ExampleSettings>> = new Map();
 
-connection.onDidChangeConfiguration(change => {
+connection.onDidChangeConfiguration((change) => {
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
 		documentSettings.clear();
@@ -146,7 +136,7 @@ function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
 	if (!result) {
 		result = connection.workspace.getConfiguration({
 			scopeUri: resource,
-			section: 'languageServerExample'
+			section: 'languageServerExample',
 		});
 		documentSettings.set(resource, result);
 	}
@@ -164,162 +154,219 @@ function installLinter(): string {
 				},
 			});
 
-			return "api-linter installed successfully";
+			return 'api-linter installed successfully';
 		} catch (error) {
-			return "failed to install api-linter: ${error}";
+			return 'failed to install api-linter: ${error}';
 		}
 	} else {
 		return 'api-linter is already installed';
 	}
 }
 
-async function applyLinter(document: TextDocument): Promise<string | undefined> {
+async function requestLinting(document: TextDocument): Promise<string> {
 	const exec = util.promisify(child_process.exec);
 
 	const fileURI = document.uri;
 	const urlObject = new URL(fileURI);
 	const filePath = path.normalize(urlObject.pathname);
 
-	connection.console.log("filePath: ${ filePath }");
-	// const filePath = fileURI.fsPath;
+	connection.console.log('filePath: ${ filePath }');
 	try {
 		const { stdout, stderr } = await exec(`${tmpLinterPath} ${filePath}`);
 		return stdout;
 	} catch (error) {
-		return "error running api-linter:" + error;
+		return 'error running api-linter:' + error;
 	}
 }
 
-type Problem = {
-	message: string,
-	suggestion?: string,
-	range: Range,
-	rule_id: string,
-	rule_doc_uri: string
-};
+class Problem {
+	message: string;
+	suggestion?: string;
+	range: Range;
+	rule_id: string;
+	rule_doc_uri: string;
 
-type LinterOutput = {
-	file_path: string,
-	problems: Problem[]
-};
+	constructor(
+		message: string,
+		range: Range,
+		rule_id: string,
+		rule_doc_uri: string,
+		suggestion?: string
+	) {
+		this.message = message;
+		this.range = range;
+		this.rule_id = rule_id;
+		this.rule_doc_uri = rule_doc_uri;
+		if (suggestion) {
+			this.suggestion = suggestion;
+		}
+	}
 
-function extractLinterOutput(output: string): LinterOutput[] {
+	toString() {
+		return `- message: ${this.message}
+    ${this.suggestion ? `suggestion: ${this.suggestion}` : ''}
+    location:
+      start_position:
+        line_number: ${this.range.start.line}
+        column_number: ${this.range.start.character}
+      end_position:
+        line_number: ${this.range.end.line}
+        column_number: ${this.range.end.character}
+    rule_id: ${this.rule_id}
+    rule_doc_uri: ${this.rule_doc_uri}`;
+	}
+}
 
+class LinterObject {
+	file_path: string;
+	problems: Problem[];
+	constructor(file_path: string, problems: Problem[]) {
+		this.file_path = file_path;
+		this.problems = problems;
+	}
+	toString() {
+		return `- file_path: ${this.file_path}
+		  problems:
+			${this.problems.map((problem) => problem.toString()).join('\n')}`;
+	}
+}
 
+function extractLintObjects(lintingText: string): LinterObject[] {
 	const fileRegex = /- file_path: (.*)\n\s*problems:/g;
 	const problemRegex = /\n\s*- message: ([\s\S]*?)(?=rule_id:)/g;
-	const locationRegex = /location:\n\s*start_position:\n\s*line_number: (\d+)\n\s*column_number: (\d+)\n\s*end_position:\n\s*line_number: (\d+)\n\s*column_number: (\d+)/g;
+	const locationRegex =
+		/location:\n\s*start_position:\n\s*line_number: (\d+)\n\s*column_number: (\d+)\n\s*end_position:\n\s*line_number: (\d+)\n\s*column_number: (\d+)/g;
 	const ruleIdRegex = /rule_id: (.*)/g;
 	const ruleDocUriRegex = /rule_doc_uri: (.*)/g;
-
+	const suggestionRegex = /suggestion: (.*)/g;
+	const suggestion = 'TODO';
 	let match;
-	const outputData: LinterOutput[] = [];
+	const outputData: LinterObject[] = [];
 
-	while ((match = fileRegex.exec(output)) && true) {
+	while ((match = fileRegex.exec(lintingText)) && true) {
 		const filePath = match[1];
 		const problems: Problem[] = [];
 
-		while ((match = problemRegex.exec(output)) && true) {
+		while ((match = problemRegex.exec(lintingText)) && true) {
 			const fullMessage = match[1].trim();
-			const message = fullMessage.replace(locationRegex, '').trim();
-			const locationMatch = locationRegex.exec(output);
-			const ruleIdMatch = ruleIdRegex.exec(output);
-			const ruleDocUriMatch = ruleDocUriRegex.exec(output);
+			const message = fullMessage
+				.replace(locationRegex, '')
+				.replace(suggestionRegex, '')
+				.trim();
+			const locationMatch = locationRegex.exec(lintingText);
+			const ruleIdMatch = ruleIdRegex.exec(lintingText);
+			const ruleDocUriMatch = ruleDocUriRegex.exec(lintingText);
 
-			const p1: Position = Position.create(locationMatch ? parseInt(locationMatch[1]) : 0, locationMatch ? parseInt(locationMatch[2]) : 0);
-			const p2: Position = Position.create(locationMatch ? parseInt(locationMatch[3]) : 0, locationMatch ? parseInt(locationMatch[4]) : 0);
+			const p1: Position = Position.create(
+				locationMatch ? parseInt(locationMatch[1]) : 0,
+				locationMatch ? parseInt(locationMatch[2]) : 0
+			);
+			const p2: Position = Position.create(
+				locationMatch ? parseInt(locationMatch[3]) : 0,
+				locationMatch ? parseInt(locationMatch[4]) : 0
+			);
 			const range: Range = Range.create(p1, p2);
 
-			const problem: Problem = {
-				message,
-				range,
-				rule_id: ruleIdMatch ? ruleIdMatch[1] : '',
-				rule_doc_uri: ruleDocUriMatch ? ruleDocUriMatch[1] : '',
-			};
-
+			const rule_id = ruleIdMatch ? ruleIdMatch[1] : '';
+			const rule_doc_uri = ruleDocUriMatch ? ruleDocUriMatch[1] : '';
+			const problem = new Problem(message, range, rule_id, rule_doc_uri, suggestion);
 			problems.push(problem);
 		}
 
-		const linterOutput: LinterOutput = {
-			file_path: filePath,
-			problems
-		};
+		const lintObject = new LinterObject(filePath, problems);
 
-		outputData.push(linterOutput);
+		outputData.push(lintObject);
 	}
 
 	return outputData;
 }
 
 // Only keep settings for open documents
-documents.onDidClose(e => {
+documents.onDidClose((e) => {
 	documentSettings.delete(e.document.uri);
 });
 
-// The content of a text document has changed. This event is emitted
-// when the text document first opened or when its content has changed.
-documents.onDidChangeContent(async change => {
+documents.onDidSave(async (change) => {
 	await validateTextDocument(change.document);
 });
 
-async function getSuggestion(problem: Problem, textDocument: TextDocument): Promise<string> {
-	
-	// Data you want to send in the request
-	const text = textDocument.getText(problem.range);
-	const file = textDocument.getText();
-	const linting: Problem = problem;
-	const prompt = `Given the .proto file:\n\n${file}\n\n, and the linting output:\n\n${JSON.stringify(linting, null, 2)}\n\n in reference to the section: \n\n${text}\n\n, suggest a fix to address the linting output.`;
-	
+async function requestGptSuggestions(
+	lintObjects: LinterObject[],
+	textDocument: TextDocument
+): Promise<LinterObject[]> {
+	const lintObjectString = lintObjects[0].toString();
+	const prompt = `For each item in linting output:\n\n${lintObjectString}\n\n, refer to the .proto file that it was generated from:\n\n${textDocument.getText()}\n\n and suggest a fix to the code such that the linting item message is addressed. Only return the edited linting output string, with the suggestion fields (marked with TODOs) filled in. Do not return any other content in your response.`;
+	const url = 'https://api.openai.com/v1/chat/completions';
+	const headers = {
+		'Content-Type': 'application/json',
+		Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+		'Organization-ID': 'org-7Yj83jSiXzi17aqcuLZC96ya',
+	};
+
+	const data = {
+		model: 'gpt-3.5-turbo',
+		messages: [{ role: 'user', content: prompt }],
+		temperature: 0.7,
+	};
+
 	try {
-		const response = await openai.createCompletion({
-			model: "text-davinci-003",
-			prompt: prompt,
-			temperature: 0,
-			max_tokens: 7,
-		});
-		return response.data.choices[0].text?.toString() ?? "";
-	} catch (error) {
-		return "" + error;
+		// const response = await axios.post(url, data, { headers: headers });
+		// connection.console.log('response: ' + JSON.stringify(response.data.choices[0]));
+		// return ' ' + response.data.choices[0].message.content;
+		// const modLintingText = extractLintObjects(response.data.choices[0].message.content);
+		const modLintingText = extractLintObjects(lintObjectString);
+		return modLintingText;
+	} catch (error: any) {
+		let errorMsg = '';
+
+		if (error && error.response) {
+			errorMsg += `Error status code: ${error.response.status}\n`;
+			errorMsg += `Error data: ${JSON.stringify(error.response.data)}\n`;
+		} else if (error && error.request) {
+			errorMsg += 'No response was received: ' + JSON.stringify(error.request) + '\n';
+		} else if (error) {
+			errorMsg += 'Request setup error: ' + error.message + '\n';
+		}
+		errorMsg +=
+			error && error.config ? 'Error config: ' + JSON.stringify(error.config) : '';
+
+		return [];
 	}
 }
 
 async function validateTextDocument(textDocument: TextDocument): Promise<void> {
+	const lintingText = await requestLinting(textDocument);
+	const lintObjects = extractLintObjects(lintingText);
+	const suggestedLintObjects = await requestGptSuggestions(lintObjects, textDocument);
 
-	const linting = await applyLinter(textDocument);
-	if (!linting) {
-		return;
-	}
-	connection.console.log("Current file linting: " + linting);
-
-	let problems = 0;
 	const diagnostics: Diagnostic[] = [];
-	const m = extractLinterOutput(linting);
-	for (const linterOutput of m) {
-		for (const problem of linterOutput.problems) {
+	let problems = 0;
+	for (const object of suggestedLintObjects) {
+		for (const problem of object.problems) {
 			problems++;
-
+			const lint = problem.message;
+			const suggest = problem.suggestion;
 			const diagnostic: Diagnostic = {
 				severity: DiagnosticSeverity.Warning,
 				range: problem.range,
-				message: `${problem.message}`,
+				message: `${lint}`,
 				source: `proto-lindtTODO`,
 			};
 			if (hasDiagnosticRelatedInformationCapability) {
-				const suggestion = await getSuggestion(problem, textDocument);
 				diagnostic.relatedInformation = [
 					{
 						location: {
 							uri: textDocument.uri,
-							range: Object.assign({}, diagnostic.range)
+							range: Object.assign({}, problem.range),
 						},
-						message: suggestion.toString()
+						message: suggest!,
 					},
 					{
 						location: {
 							uri: textDocument.uri,
-							range: Object.assign({}, diagnostic.range)
+							range: Object.assign({}, problem.range),
 						},
-						message: problem.rule_id + " : " + problem.rule_doc_uri
+						message: problem.rule_doc_uri,
 					},
 				];
 			}
@@ -331,10 +378,7 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
 }
 
-// 	// Send the computed diagnostics to VSCode.
-// 	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
-// }
-connection.onDidChangeWatchedFiles(_change => {
+connection.onDidChangeWatchedFiles((_change) => {
 	// Monitored files have change in VSCode
 	connection.console.log('We received an file change event');
 });
@@ -349,31 +393,29 @@ connection.onCompletion(
 			{
 				label: 'TypeScript',
 				kind: CompletionItemKind.Text,
-				data: 1
+				data: 1,
 			},
 			{
 				label: 'JavaScript',
 				kind: CompletionItemKind.Text,
-				data: 2
-			}
+				data: 2,
+			},
 		];
 	}
 );
 
 // This handler resolves additional information for the item selected in
 // the completion list.
-connection.onCompletionResolve(
-	(item: CompletionItem): CompletionItem => {
-		if (item.data === 1) {
-			item.detail = 'TypeScript details';
-			item.documentation = 'TypeScript documentation';
-		} else if (item.data === 2) {
-			item.detail = 'JavaScript details';
-			item.documentation = 'JavaScript documentation';
-		}
-		return item;
+connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
+	if (item.data === 1) {
+		item.detail = 'TypeScript details';
+		item.documentation = 'TypeScript documentation';
+	} else if (item.data === 2) {
+		item.detail = 'JavaScript details';
+		item.documentation = 'JavaScript documentation';
 	}
-);
+	return item;
+});
 
 // Make the text document manager listen on the connection
 // for open, change and close text document events

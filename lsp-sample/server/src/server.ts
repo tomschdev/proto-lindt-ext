@@ -347,6 +347,7 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 			const lint = problem.message;
 			const suggest = problem.suggestion;
 			const diagnostic: Diagnostic = {
+				code: `AIP-000${problems}`,
 				severity: DiagnosticSeverity.Warning,
 				range: problem.range,
 				message: `${lint}`,

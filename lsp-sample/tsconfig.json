@@ -18,5 +18,4 @@
 		{ "path": "./client" },
 		{ "path": "./server" }
 	],
-	"extends": "@tsconfig/node16/tsconfig.json"
 }
